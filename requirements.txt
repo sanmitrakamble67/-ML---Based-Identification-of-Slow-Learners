@@ -1,0 +1,8 @@
+pandas
+scikit-learn
+joblib
+plotly
+fpdf2
+sqlalchemy
+streamlit
+statsmodels
