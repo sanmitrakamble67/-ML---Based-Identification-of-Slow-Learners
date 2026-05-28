@@ -10,6 +10,43 @@ from database import SessionLocal, PredictionLog
 st.set_page_config(page_title="ML - Based Identification of Slow Learners", layout="wide")
 st.title("🎓 ML - Based Identification of Slow Learners")
 
+# --- 🔒 AUTHENTICATION SYSTEM ---
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.role = None
+
+if not st.session_state.logged_in:
+    st.subheader("System Login")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit_button = st.form_submit_button("Login", type="primary")
+        
+        if submit_button:
+            if username == "admin" and password == "admin123":
+                st.session_state.logged_in = True
+                st.session_state.role = "admin"
+                st.rerun()
+            elif username == "student" and password == "student123":
+                st.session_state.logged_in = True
+                st.session_state.role = "student"
+                st.rerun()
+            else:
+                st.error("❌ Invalid credentials. Please try again.")
+    
+    # This completely blocks the rest of the app from running if not logged in
+    st.stop() 
+
+# --- LOGOUT BUTTON (Visible on Sidebar) ---
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.role = None
+    st.rerun()
+
+st.sidebar.markdown(f"**Current User Role:** `{st.session_state.role.upper()}`")
+
+
 # --- MEMORY MANAGEMENT ---
 @st.cache_resource
 def load_model():
@@ -22,7 +59,7 @@ def load_data():
 model = load_model()
 df = load_data()
 
-# Calculate Benchmarks
+# Calculate Benchmarks for Advice Engine
 fast_students = df[df['Performance_Tier'] == 'Fast']
 benchmarks = {
     'attendance': fast_students['Attendance_%'].mean(),
@@ -65,9 +102,22 @@ def create_report_card(inputs, prediction, failures):
             
     return bytes(pdf.output())
 
-# --- ROUTING ---
-tab_predict, tab_eda, tab_data, tab_admin = st.tabs(["🔮 Classify & Advise", "📈 Mega EDA Dashboard", "📊 Historical Data", "🛡️ Admin Panel"])
 
+# --- 🚦 ROLE-BASED ROUTING ---
+if st.session_state.role == "admin":
+    # Admins get all 4 tabs
+    tab_predict, tab_eda, tab_data, tab_admin = st.tabs(["🔮 Classify & Advise", "📈 Mega EDA Dashboard", "📊 Historical Data", "🛡️ Admin Panel"])
+else:
+    # Students only get 1 tab
+    tab_predict = st.tabs(["🔮 Classify & Advise"])[0] 
+    
+    # Create "invisible" tabs for the others so Python doesn't crash 
+    tab_eda = st.empty()
+    tab_data = st.empty()
+    tab_admin = st.empty()
+
+
+# --- TAB 1: PREDICTION & ADVICE (Visible to All) ---
 with tab_predict:
     st.header("Enter Student Details")
     with st.form("student_form"):
@@ -86,16 +136,16 @@ with tab_predict:
     if submitted:
         extra_val = 1 if extra == "Yes" else 0
         
-        # 1. Gather raw features in perfect order
+        # Gather raw features in perfect order
         raw_features = [exam, attendance, submission, study, cgpa, extra_val]
         
-        # 2. BRUTE FORCE ALIGNMENT
+        # BRUTE FORCE ALIGNMENT
         input_data = pd.DataFrame([raw_features], columns=model.feature_names_in_)
 
-        # 3. Predict
+        # Predict
         prediction = model.predict(input_data)[0]
         
-        # 4. Log to SQL
+        # Log to SQL
         try:
             db = SessionLocal()
             new_log = PredictionLog(
@@ -146,42 +196,51 @@ with tab_predict:
         pdf_bytes = create_report_card(raw_features, prediction, failures_for_pdf)
         st.download_button(label="⬇️ Download Official Report Card (PDF)", data=pdf_bytes, file_name="Student_Report.pdf", mime="application/pdf", type="primary")
 
+
+# --- TAB 2: EDA DASHBOARD (Admin Only) ---
 with tab_eda:
-    st.header("Comprehensive Data Visualization")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.plotly_chart(px.histogram(df, x="Exam_Score", color="Performance_Tier", title="Exam Score Distribution"), use_container_width=True)
-    with c2:
-        st.plotly_chart(px.box(df, x="Performance_Tier", y="Attendance_%", color="Performance_Tier", title="Attendance Spread by Tier"), use_container_width=True)
-    
-    c3, c4 = st.columns(2)
-    with c3:
-        st.plotly_chart(px.density_contour(df, x="Study_Hours_Per_Day", y="Exam_Score", color="Performance_Tier", title="Study vs Score Density"), use_container_width=True)
-    with c4:
-        st.plotly_chart(px.scatter(df, x="Study_Hours_Per_Day", y="Exam_Score", color="Performance_Tier", trendline="ols", title="Study Hours Impact"), use_container_width=True)
-
-with tab_data:
-    st.header("Historical Training Database")
-    st.dataframe(df, use_container_width=True)
-
-with tab_admin:
-    st.header("Admin Control Panel: Live AI Logs")
-    try:
-        db = SessionLocal()
-        logs = db.query(PredictionLog).all()
-        db.close()
+    if st.session_state.role == "admin":
+        st.header("Comprehensive Data Visualization")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(px.histogram(df, x="Exam_Score", color="Performance_Tier", title="Exam Score Distribution"), use_container_width=True)
+        with c2:
+            st.plotly_chart(px.box(df, x="Performance_Tier", y="Attendance_%", color="Performance_Tier", title="Attendance Spread by Tier"), use_container_width=True)
         
-        if logs:
-            log_data = [{"Log ID": l.id, "Timestamp": l.timestamp.strftime("%Y-%m-%d %H:%M:%S"), "Exam Score": l.exam_score, "AI Prediction": l.predicted_tier} for l in logs]
-            log_df = pd.DataFrame(log_data)
+        c3, c4 = st.columns(2)
+        with c3:
+            st.plotly_chart(px.density_contour(df, x="Study_Hours_Per_Day", y="Exam_Score", color="Performance_Tier", title="Study vs Score Density"), use_container_width=True)
+        with c4:
+            st.plotly_chart(px.scatter(df, x="Study_Hours_Per_Day", y="Exam_Score", color="Performance_Tier", trendline="ols", title="Study Hours Impact"), use_container_width=True)
+
+
+# --- TAB 3: DATA VIEWER (Admin Only) ---
+with tab_data:
+    if st.session_state.role == "admin":
+        st.header("Historical Training Database")
+        st.dataframe(df, use_container_width=True)
+
+
+# --- TAB 4: ADMIN PANEL / SQL LOGS (Admin Only) ---
+with tab_admin:
+    if st.session_state.role == "admin":
+        st.header("Admin Control Panel: Live AI Logs")
+        try:
+            db = SessionLocal()
+            logs = db.query(PredictionLog).all()
+            db.close()
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Evaluations", len(log_df))
-            c2.metric("Fast Learners", len(log_df[log_df["AI Prediction"] == "Fast"]))
-            c3.metric("At-Risk (Slow)", len(log_df[log_df["AI Prediction"] == "Slow"]))
-            
-            st.dataframe(log_df.sort_values(by="Log ID", ascending=False), use_container_width=True)
-        else:
-            st.info("No evaluations logged yet.")
-    except Exception as e:
-        st.error(f"Database connection failed: {e}")
+            if logs:
+                log_data = [{"Log ID": l.id, "Timestamp": l.timestamp.strftime("%Y-%m-%d %H:%M:%S"), "Exam Score": l.exam_score, "AI Prediction": l.predicted_tier} for l in logs]
+                log_df = pd.DataFrame(log_data)
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total Evaluations", len(log_df))
+                c2.metric("Fast Learners", len(log_df[log_df["AI Prediction"] == "Fast"]))
+                c3.metric("At-Risk (Slow)", len(log_df[log_df["AI Prediction"] == "Slow"]))
+                
+                st.dataframe(log_df.sort_values(by="Log ID", ascending=False), use_container_width=True)
+            else:
+                st.info("No evaluations logged yet.")
+        except Exception as e:
+            st.error(f"Database connection failed: {e}")
